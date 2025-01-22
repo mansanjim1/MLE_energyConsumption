@@ -1,7 +1,5 @@
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
@@ -11,7 +9,10 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV
 import xgboost as xgb
-from imblearn.over_sampling import SMOTE
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import seaborn as sns
 
 # Cargar datos
 df = pd.read_csv('Data/Energy_consumption_dataset.csv')
@@ -29,13 +30,13 @@ print(df.describe())
 print("Se revisa si existe algún dato faltante")
 print(df.isnull().sum())
 
-# # Visualización de la distribución
-# df['EnergyConsumption'].hist(bins=30, color='blue', alpha=0.7, edgecolor='black')
-# plt.title('Distribución de consumo de energía')
-# plt.xlabel('Consumo de energía')
-# plt.ylabel('Frecuencia')
-# plt.grid(axis='y', linestyle='--', alpha=0.7)
-# plt.show()
+# Visualización de la distribución
+df['EnergyConsumption'].hist(bins=30, color='blue', alpha=0.7, edgecolor='black')
+plt.title('Distribución de consumo de energía')
+plt.xlabel('Consumo de energía')
+plt.ylabel('Frecuencia')
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
 
 
 # Función para asignar estaciones del año
@@ -55,37 +56,29 @@ df['season'] = df['Month'].apply(get_season)
 # Conversión de datos categóricos a numéricos
 df = pd.get_dummies(df, columns=['DayOfWeek', 'Holiday', 'HVACUsage', 'LightingUsage'], drop_first=True)
 
-# Feature engineering
-df['Temp_Humidity_Interaction'] = df['Temperature'] * df['Humidity']
-df['TimeOfDay'] = pd.cut(df['Hour'], bins=[0, 6, 12, 18, 24], labels=['Night', 'Morning', 'Afternoon', 'Evening'])
-df = pd.get_dummies(df, columns=['TimeOfDay'], drop_first=True)
+# Seleccionar solo las columnas numéricas
+numeric_columns = df.select_dtypes(include=['float64', 'int64']).columns
 
-# Eliminación de valores atípicos
-Q1 = df['EnergyConsumption'].quantile(0.25)
-Q3 = df['EnergyConsumption'].quantile(0.75)
-IQR = Q3 - Q1
-df = df[(df['EnergyConsumption'] >= (Q1 - 1.5 * IQR)) & (df['EnergyConsumption'] <= (Q3 + 1.5 * IQR))]
+# Crear boxplots para cada variable numérica para comprobar los outliers, el IQR y la mediana
+plt.figure(figsize=(12, 8))
+df[numeric_columns].boxplot()
+plt.title('Boxplot de variables numéricas')
+plt.xticks(rotation=45)
+plt.grid(True)
+plt.show()
 
 # Normalización de datos
 numeric_columns = df.select_dtypes(include=['int64', 'float64']).columns.difference(['EnergyConsumption'])
 scaler = StandardScaler()
 df[numeric_columns] = scaler.fit_transform(df[numeric_columns])
 
-# Selección de características
-selected_features = ['SquareFootage', 'Temperature', 'RenewableEnergy', 'Humidity', 'Hour', 'Occupancy', 'HVACUsage_On',
-                     'Month', 'LightingUsage_On', 'DayOfWeek_Tuesday', 'Holiday_Yes', 'Temp_Humidity_Interaction',
-                     'TimeOfDay_Morning', 'TimeOfDay_Afternoon', 'TimeOfDay_Evening']
-ordered_features = ['EnergyConsumption'] + selected_features
-df_ordered = df[ordered_features]
-
-# Balanceo del dataset con SMOTE
-X = df_ordered.drop(columns=['EnergyConsumption'])
-y = df_ordered['EnergyConsumption']
+X = df.drop(columns=['EnergyConsumption','season']) #Quitamos season porque no es necesario para los modelos
+y = df['EnergyConsumption']
 
 # División del conjunto de datos
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=0)
 
-# Modelos de regresión
+# Modelos de regresión sin optimizacion
 model_lr = LinearRegression()
 model_lr.fit(X_train, y_train)
 y_pred_lr = model_lr.predict(X_test)
@@ -112,19 +105,7 @@ r2_knn = r2_score(y_test, y_pred_knn)
 print("K-Nearest Neighbors - MSE:", mse_knn)
 print("K-Nearest Neighbors - R²:", r2_knn)
 
-# Optimización de hiperparámetros para XGBoost
-param_grid_xgb = {
-    'n_estimators': [50, 100, 200],
-    'learning_rate': [0.01, 0.1, 0.2],
-    'max_depth': [3, 5, 7]
-}
-grid_search_xgb = GridSearchCV(xgb.XGBRegressor(objective='reg:squarederror'), param_grid_xgb, cv=5,
-                               scoring='neg_mean_squared_error')
-grid_search_xgb.fit(X_train, y_train)
-
-# # Modelo XGBoost con los mejores hiperparámetros
-best_params = grid_search_xgb.best_params_
-model_xgb = xgb.XGBRegressor(objective='reg:squarederror', **best_params)
+model_xgb = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
 model_xgb.fit(X_train, y_train)
 y_pred_xgb = model_xgb.predict(X_test)
 mse_xgb = mean_squared_error(y_test, y_pred_xgb)
@@ -132,263 +113,247 @@ r2_xgb = r2_score(y_test, y_pred_xgb)
 print("XGBoost - MSE:", mse_xgb)
 print("XGBoost - R²:", r2_xgb)
 
+
+# Crear gráfico comparativo de MSE y R²
 models = ['Regresión Lineal', 'Árbol de Decisión', 'KNN', 'XGBoost']
 mse_values = [mse_lr, mse_tree, mse_knn, mse_xgb]
 r2_values = [r2_lr, r2_tree, r2_knn, r2_xgb]
 
-plt.figure(figsize=(10, 6))
-plt.bar(models, r2_values, alpha=0.7, label='R²')
-plt.plot(models, mse_values, color='red', marker='o', label='MSE')
+fig, ax1 = plt.subplots(figsize=(10, 6))
+ax1.bar(models, r2_values, color='blue', alpha=0.7, label='R²')
+ax1.set_ylabel('R²', color='blue')
+ax1.tick_params(axis='y', labelcolor='blue')
+ax1.set_ylim(0, 1)  # R² suele estar en el rango de 0 a 1
+for i, r2 in enumerate(r2_values):
+    ax1.text(i, r2, f'{r2:.2f}', ha='center', va='bottom', fontsize=10, color='black')
+ax2 = ax1.twinx()
+ax2.plot(models, mse_values, color='red', marker='o', label='MSE', linewidth=2)
+ax2.set_ylabel('MSE', color='red')
+ax2.tick_params(axis='y', labelcolor='red')
 plt.title('Comparación de MSE y R² entre modelos')
-plt.ylabel('Valor')
+fig.tight_layout()
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+# Hiperparámetros para Regresión Lineal
+param_grid_lr = {
+    'fit_intercept': [True, False],  # Si se ajusta el intercepto o no
+    'copy_X': [True, False]          # Si se copia X o se sobrescribe
+}
+
+# Hiperparámetros para Árbol de Decisión
+param_grid_tree = {
+    'max_depth': [3, 5, 10, 20],          # Profundidad máxima del árbol
+    'min_samples_split': [2, 5, 10],      # Mínimo de muestras para dividir un nodo
+    'min_samples_leaf': [1, 2, 5]         # Mínimo de muestras por hoja
+}
+
+# Hiperparámetros para K-Nearest Neighbors (KNN)
+param_grid_knn = {
+    'n_neighbors': [3, 5, 7, 10],          # Número de vecinos
+    'weights': ['uniform', 'distance'],     # Peso uniforme o basado en la distancia
+    'metric': ['euclidean', 'manhattan']    # Distancia euclidiana o manhattan
+}
+
+# Hiperparámetros para XGBoost
+param_grid_xgb = {
+    'n_estimators': [50, 100, 200],         # Número de árboles
+    'learning_rate': [0.01, 0.1, 0.2],      # Tasa de aprendizaje
+    'max_depth': [3, 5, 7]                  # Profundidad máxima del árbol
+}
+# Aplicar GridSearchCV a cada modelo
+grid_search_lr = GridSearchCV(LinearRegression(), param_grid_lr, cv=5, scoring='neg_mean_squared_error')
+grid_search_tree = GridSearchCV(DecisionTreeRegressor(random_state=42), param_grid_tree, cv=5, scoring='neg_mean_squared_error')
+grid_search_knn = GridSearchCV(KNeighborsRegressor(), param_grid_knn, cv=5, scoring='neg_mean_squared_error')
+grid_search_xgb = GridSearchCV(xgb.XGBRegressor(objective='reg:squarederror', random_state=42), param_grid_xgb, cv=5, scoring='neg_mean_squared_error')
+
+# Entrenar modelos optimizados
+grid_search_lr.fit(X_train, y_train)
+grid_search_tree.fit(X_train, y_train)
+grid_search_knn.fit(X_train, y_train)
+grid_search_xgb.fit(X_train, y_train)
+
+# Obtener los mejores modelos
+best_lr = grid_search_lr.best_estimator_
+best_tree = grid_search_tree.best_estimator_
+best_knn = grid_search_knn.best_estimator_
+best_xgb = grid_search_xgb.best_estimator_
+
+# Realizar predicciones en base a los mejores modelos obtenidos anteriormente
+y_pred_lr_gs = best_lr.predict(X_test)
+y_pred_tree_gs = best_tree.predict(X_test)
+y_pred_knn_gs = best_knn.predict(X_test)
+y_pred_xgb_gs = best_xgb.predict(X_test)
+
+# Calcular R² de los modelos optimizados
+r2_lr_gs = r2_score(y_test, y_pred_lr_gs)
+r2_tree_gs = r2_score(y_test, y_pred_tree_gs)
+r2_knn_gs = r2_score(y_test, y_pred_knn_gs)
+r2_xgb_gs = r2_score(y_test, y_pred_xgb_gs)
+
+mse_values = [
+    mean_squared_error(y_test, y_pred_lr_gs),
+    mean_squared_error(y_test, y_pred_tree_gs),
+    mean_squared_error(y_test, y_pred_knn_gs),
+    mean_squared_error(y_test, y_pred_xgb_gs)
+]
+
+print("Regresión Lineal con Hiper-parametros ajustados - MSE:", mse_values[0])
+print("Regresión Lineal con Hiper-parametros ajustados - R²:", r2_lr_gs)
+print("Árbol de Decisión con Hiper-parametros ajustados- MSE:", mse_values[1])
+print("Árbol de Decisión con Hiper-parametros ajustados- R²:", r2_tree_gs)
+print("K-Nearest Neighbors con Hiper-parametros ajustados - MSE:", mse_values[2])
+print("K-Nearest Neighbors con Hiper-parametros ajustados - R²:", r2_knn_gs)
+print("XGBoost con Hiper-parametros ajustados - MSE:", mse_values[3])
+print("XGBoost con Hiper-parametros ajustados - R²:", r2_xgb_gs)
+
+r2_values = [
+    r2_score(y_test, y_pred_lr_gs),
+    r2_score(y_test, y_pred_tree_gs),
+    r2_score(y_test, y_pred_knn_gs),
+    r2_score(y_test, y_pred_xgb_gs)
+]
+
+models = ['Regresión Lineal', 'Árbol de Decisión', 'KNN', 'XGBoost']
+
+# Visualización de los resultados despues de optimizar los hiper-parametros
+fig, ax1 = plt.subplots(figsize=(10, 6))
+ax1.bar(models, r2_values, color='blue', alpha=0.7, label='R²')
+ax1.set_ylabel('R²', color='blue')
+ax1.tick_params(axis='y', labelcolor='blue')
+ax1.set_ylim(0, 1)
+for i, r2 in enumerate(r2_values):
+    ax1.text(i, r2, f'{r2:.2f}', ha='center', va='bottom', fontsize=10, color='black')
+
+ax2 = ax1.twinx()
+ax2.plot(models, mse_values, color='red', marker='o', label='MSE', linewidth=2)
+ax2.set_ylabel('MSE', color='red')
+ax2.tick_params(axis='y', labelcolor='red')
+plt.title('Comparación de MSE y R² entre modelos optimizados')
+fig.tight_layout()
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+
+# Comparación de R² antes y después de la optimización
+models = ['Regresión Lineal', 'Árbol de Decisión', 'KNN', 'XGBoost']
+r2_before = [r2_lr, r2_tree, r2_knn, r2_xgb]
+r2_after = [r2_lr_gs, r2_tree_gs, r2_knn_gs, r2_xgb_gs]
+
+# Visualización de los resultados
+x = range(len(models))
+plt.figure(figsize=(10, 6))
+plt.bar(x, r2_before, width=0.4, label='Sin GridSearch', color='blue', align='center')
+plt.bar([p + 0.4 for p in x], r2_after, width=0.4, label='Con GridSearch', color='green', align='center')
+plt.xticks([p + 0.2 for p in x], models)
+plt.ylabel('R²')
+plt.title('Comparación de R² antes y después de GridSearch')
 plt.legend()
+plt.grid(axis='y', linestyle='--', alpha=0.7)
 plt.show()
 
-X = df_ordered.drop(columns=['EnergyConsumption'])
-y = df_ordered['EnergyConsumption']
+#Seleccionar las mejores características
+# Seleccionar las 10 mejores características usando SelectKBest
+k = 10  # Número de características a seleccionar
+selector = SelectKBest(score_func=f_regression, k=k)
+X_selected = selector.fit_transform(X, y)
 
-# Seleccionar las 10 características más importantes según ANOVA F-value
-selector = SelectKBest(score_func=f_regression, k=10)
-X_new = selector.fit_transform(X, y)
-
-# Mostrar las características seleccionadas
+# Nombres de las características seleccionadas
 selected_features = X.columns[selector.get_support()]
-print("Características seleccionadas:", selected_features)
+print(f'Mejores {k} características seleccionadas:', selected_features)
 
-X_selected_df = X[selected_features]
+# Crear nuevo DataFrame con las características seleccionadas
+X_selected_df = pd.DataFrame(X_selected, columns=selected_features)
 
-# División del conjunto de datos
-X_train, X_test, y_train, y_test = train_test_split(X_selected_df, y, test_size=0.20, random_state=0)
+# División del conjunto de datos con las características seleccionadas
+X_train_sel, X_test_sel, y_train_sel, y_test_sel = train_test_split(X_selected_df, y, test_size=0.20, random_state=42)
 
-# Modelos de regresión
-model_lr = LinearRegression()
-model_lr.fit(X_train, y_train)
-y_pred_lr = model_lr.predict(X_test)
-mse_lr = mean_squared_error(y_test, y_pred_lr)
-r2_lr = r2_score(y_test, y_pred_lr)
-print("Regresión Lineal - MSE con características seleccionadas:", mse_lr)
-print("Regresión Lineal - R² con características seleccionadas:", r2_lr)
+# Aplicar GridSearchCV a cada modelo con las características seleccionadas
+grid_search_lr_sel = GridSearchCV(LinearRegression(), param_grid_lr, cv=5, scoring='r2')
+grid_search_tree_sel = GridSearchCV(DecisionTreeRegressor(random_state=42), param_grid_tree, cv=5, scoring='r2')
+grid_search_knn_sel = GridSearchCV(KNeighborsRegressor(), param_grid_knn, cv=5, scoring='r2')
+grid_search_xgb_sel = GridSearchCV(xgb.XGBRegressor(objective='reg:squarederror', random_state=42), param_grid_xgb, cv=5, scoring='r2')
 
-from sklearn.cluster import DBSCAN, KMeans
+# Entrenar modelos con GridSearch
+grid_search_lr_sel.fit(X_train_sel, y_train_sel)
+grid_search_tree_sel.fit(X_train_sel, y_train_sel)
+grid_search_knn_sel.fit(X_train_sel, y_train_sel)
+grid_search_xgb_sel.fit(X_train_sel, y_train_sel)
 
-X_clustering = df_ordered.drop(columns=['EnergyConsumption'])
+# Obtener los mejores modelos con características seleccionadas
+best_lr_sel = grid_search_lr_sel.best_estimator_
+best_tree_sel = grid_search_tree_sel.best_estimator_
+best_knn_sel = grid_search_knn_sel.best_estimator_
+best_xgb_sel = grid_search_xgb_sel.best_estimator_
 
-# Aplicar DBSCAN
-dbscan = DBSCAN(eps=0.5, min_samples=10)
-df_ordered['Cluster_DBSCAN'] = dbscan.fit_predict(X_clustering)
+# Realizar predicciones con los modelos optimizados
+y_pred_lr_sel = best_lr_sel.predict(X_test_sel)
+y_pred_tree_sel = best_tree_sel.predict(X_test_sel)
+y_pred_knn_sel = best_knn_sel.predict(X_test_sel)
+y_pred_xgb_sel = best_xgb_sel.predict(X_test_sel)
 
-# Contar el número de clusters encontrados (valor -1 indica ruido/outliers)
-print(df_ordered['Cluster_DBSCAN'].value_counts())
+# Calcular R² de los modelos optimizados con características seleccionadas
+r2_lr_sel = r2_score(y_test_sel, y_pred_lr_sel)
+r2_tree_sel = r2_score(y_test_sel, y_pred_tree_sel)
+r2_knn_sel = r2_score(y_test_sel, y_pred_knn_sel)
+r2_xgb_sel = r2_score(y_test_sel, y_pred_xgb_sel)
 
-# Visualizar los clusters
-sns.scatterplot(x=df_ordered['SquareFootage'], y=df_ordered['EnergyConsumption'], hue=df_ordered['Cluster_DBSCAN'],
-                palette='viridis')
-plt.title('DBSCAN Clustering')
+# Comparación de R² con características seleccionadas
+models = ['Regresión Lineal', 'Árbol de Decisión', 'KNN', 'XGBoost']
+r2_values_selected = [r2_lr_sel, r2_tree_sel, r2_knn_sel, r2_xgb_sel]
+
+plt.figure(figsize=(10, 6))
+plt.bar(models, r2_values_selected, color='blue', alpha=0.7, label='R² con KBest')
+plt.ylabel('R²')
+plt.title('Comparación de R² con mejores características seleccionadas')
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+# Mostrar valores sobre las barras
+for i, r2 in enumerate(r2_values_selected):
+    plt.text(i, r2, f'{r2:.2f}', ha='center', va='bottom', fontsize=10, color='black')
+
 plt.show()
 
-# Seleccionar las características para el clustering (sin la variable objetivo)
-X_clustering = df_ordered.drop(columns=['EnergyConsumption'])
+# A continuación empieza la parte de clustering
 
-# Determinar el número óptimo de clusters usando el método del codo
+# Aplicar PCA para reducir a n componentes principales
+
+# Evaluar la inercia para diferentes valores de k, gracias a esto podemos obtener el número de clusteres optimo
 inertia = []
-range_clusters = range(2, 11)
+range_clusters = range(2, 11)  # Probar de 2 a 10 clusters
 
 for k in range_clusters:
-    kmeans = KMeans(n_clusters=k, random_state=42)
-    kmeans.fit(X_clustering)
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    kmeans.fit(X)
     inertia.append(kmeans.inertia_)
 
 # Graficar el método del codo
 plt.figure(figsize=(8, 6))
-plt.plot(range_clusters, inertia, marker='o')
-plt.xlabel('Número de clusters')
-plt.ylabel('Inercia (Distorsión)')
+plt.plot(range_clusters, inertia, marker='o', linestyle='-')
+plt.xlabel('Número de Clusters')
+plt.ylabel('Inercia')
 plt.title('Método del Codo para determinar el número óptimo de clusters')
 plt.grid()
 plt.show()
 
-# Selección de características usando SelectKBest
-X = df_ordered.drop(columns=['EnergyConsumption'])
-y = df_ordered['EnergyConsumption']
-selector = SelectKBest(score_func=f_regression, k=5)
-X_selected = selector.fit_transform(X, y)
-selected_features = X.columns[selector.get_support()]
-print("Características seleccionadas con KBest:", selected_features)
+# Iterar sobre diferentes números de componentes principales
+for i in range(2, 5):
+    pca = PCA(n_components=i)
+    X_pca = pca.fit_transform(X)
 
-X_selected_df = X[selected_features]
+    # Aplicar K-Means después de la reducción de dimensionalidad
+    kmeans = KMeans(n_clusters=4, random_state=42, n_init=10)
+    clusters = kmeans.fit_predict(X_pca)
 
-# Clustering con K-Means usando las 5 características más importantes
-optimal_clusters = 4
-kmeans = KMeans(n_clusters=optimal_clusters, random_state=42, n_init=10)
-df_ordered['Cluster_KMeans'] = kmeans.fit_predict(X_selected_df)
+    # Visualizar los clusters resultantes (usando solo las dos primeras componentes para visualización)
+    plt.figure(figsize=(8, 6))
+    sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=clusters, palette='viridis', s=50)
+    plt.title(f'Clustering con K-Means después de PCA ({i} Componentes)')
+    plt.xlabel('Componente Principal 1')
+    plt.ylabel('Componente Principal 2')
+    plt.grid(True)
+    plt.legend(title='Clusters')
+    plt.show()
 
-# Visualización de los clusters
-plt.figure(figsize=(10, 6))
-sns.scatterplot(
-    x=df_ordered[selected_features[0]],
-    y=df_ordered[selected_features[1]],
-    hue=df_ordered['Cluster_KMeans'],
-    palette='viridis',
-    alpha=0.7,
-    s=50
-)
-plt.title(f'Clustering K-Means con {optimal_clusters} Clusters')
-plt.xlabel(selected_features[0])
-plt.ylabel(selected_features[1])
-plt.legend(title="Clusters")
-plt.grid(True)
-plt.show()
-
-# Evaluación del clustering
-from sklearn.metrics import silhouette_score
-
-silhouette_avg = silhouette_score(X_selected_df, df_ordered['Cluster_KMeans'])
-print(f'Coeficiente de Silhouette para {optimal_clusters} clusters: {silhouette_avg:.2f}')
-
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# Aplicar PCA para reducir la dimensionalidad a 2 componentes principales
-pca = PCA(n_components=2)
-X_pca = pca.fit_transform(X_selected_df)
-
-# Convertir el resultado en un DataFrame
-df_pca = pd.DataFrame(X_pca, columns=['PC1', 'PC2'])
-
-# Aplicar K-Means a los datos reducidos
-optimal_clusters = 4  # O prueba diferentes valores
-kmeans = KMeans(n_clusters=optimal_clusters, random_state=42, n_init=10)
-df_pca['Cluster'] = kmeans.fit_predict(X_pca)
-
-# Visualización de los clusters resultantes
-plt.figure(figsize=(10, 6))
-sns.scatterplot(x=df_pca['PC1'], y=df_pca['PC2'], hue=df_pca['Cluster'], palette='viridis', s=50)
-plt.title('Clustering K-Means con PCA (2 Componentes Principales)')
-plt.xlabel('Componente Principal 1')
-plt.ylabel('Componente Principal 2')
-plt.legend(title='Clusters')
-plt.grid(True)
-plt.show()
-
-pca_full = PCA()
-pca_full.fit(X_selected_df)
-
-# Visualizar la varianza explicada acumulativa
-plt.figure(figsize=(8, 6))
-plt.plot(np.cumsum(pca_full.explained_variance_ratio_), marker='o')
-plt.xlabel('Número de Componentes')
-plt.ylabel('Varianza Acumulada Explicada')
-plt.title('Selección del número óptimo de componentes PCA')
-plt.grid(True)
-plt.show()
-
-from sklearn.metrics import silhouette_score
-
-silhouette_avg = silhouette_score(X_pca, df_pca['Cluster'])
-print(f'Coeficiente de Silhouette después de PCA: {silhouette_avg:.2f}')
-
-X_train, X_test, y_train, y_test = train_test_split(X_pca, y, test_size=0.20, random_state=42)
-# Crear y entrenar el modelo de regresión lineal
-model_lr = LinearRegression()
-model_lr.fit(X_train, y_train)
-y_pred_lr = model_lr.predict(X_test)
-mse_lr = mean_squared_error(y_test, y_pred_lr)
-r2_lr = r2_score(y_test, y_pred_lr)
-print("Regresión Lineal - MSE:", mse_lr)
-print("Regresión Lineal - R²:", r2_lr)
-
-# Árbol de decisión
-model_tree = DecisionTreeRegressor(max_depth=5, random_state=42)
-model_tree.fit(X_train, y_train)
-y_pred_tree = model_tree.predict(X_test)
-mse_tree = mean_squared_error(y_test, y_pred_tree)
-r2_tree = r2_score(y_test, y_pred_tree)
-print("Árbol de Decisión - MSE:", mse_tree)
-print("Árbol de Decisión - R²:", r2_tree)
-
-# K-Nearest Neighbors
-model_knn = KNeighborsRegressor(n_neighbors=5)
-model_knn.fit(X_train, y_train)
-y_pred_knn = model_knn.predict(X_test)
-mse_knn = mean_squared_error(y_test, y_pred_knn)
-r2_knn = r2_score(y_test, y_pred_knn)
-print("K-Nearest Neighbors - MSE:", mse_knn)
-print("K-Nearest Neighbors - R²:", r2_knn)
-
-# Optimización de hiperparámetros para XGBoost
-param_grid_xgb = {
-    'n_estimators': [50, 100, 200],
-    'learning_rate': [0.01, 0.1, 0.2],
-    'max_depth': [3, 5, 7]
-}
-grid_search_xgb = GridSearchCV(xgb.XGBRegressor(objective='reg:squarederror'), param_grid_xgb, cv=5,
-                               scoring='neg_mean_squared_error')
-grid_search_xgb.fit(X_train, y_train)
-
-# Modelo XGBoost con los mejores hiperparámetros
-best_params = grid_search_xgb.best_params_
-model_xgb = xgb.XGBRegressor(objective='reg:squarederror', **best_params)
-model_xgb.fit(X_train, y_train)
-y_pred_xgb = model_xgb.predict(X_test)
-mse_xgb = mean_squared_error(y_test, y_pred_xgb)
-r2_xgb = r2_score(y_test, y_pred_xgb)
-print("XGBoost - MSE:", mse_xgb)
-print("XGBoost - R²:", r2_xgb)
-
-models = ['Regresión Lineal', 'Árbol de Decisión', 'KNN', 'XGBoost']
-mse_values = [mse_lr, mse_tree, mse_knn, mse_xgb]
-r2_values = [r2_lr, r2_tree, r2_knn, r2_xgb]
-
-plt.figure(figsize=(10, 6))
-plt.bar(models, r2_values, alpha=0.7, label='R²')
-plt.plot(models, mse_values, color='red', marker='o', label='MSE')
-plt.title('Comparación de MSE y R² entre modelos')
-plt.ylabel('Valor')
-plt.legend()
-plt.show()
-
-X = df_ordered.drop(columns=['EnergyConsumption'])
-y = df_ordered['EnergyConsumption']
-
-# Seleccionar las 10 características más importantes según ANOVA F-value
-selector = SelectKBest(score_func=f_regression, k=10)
-X_new = selector.fit_transform(X, y)
-
-# Mostrar las características seleccionadas
-selected_features = X.columns[selector.get_support()]
-print("Características seleccionadas:", selected_features)
-
-X_selected_df = X[selected_features]
-
-# División del conjunto de datos
-X_train, X_test, y_train, y_test = train_test_split(X_selected_df, y, test_size=0.20, random_state=0)
-
-# Modelos de regresión
-model_lr = LinearRegression()
-model_lr.fit(X_train, y_train)
-y_pred_lr = model_lr.predict(X_test)
-mse_lr = mean_squared_error(y_test, y_pred_lr)
-r2_lr = r2_score(y_test, y_pred_lr)
-print("Regresión Lineal - MSE con características seleccionadas:", mse_lr)
-print("Regresión Lineal - R² con características seleccionadas:", r2_lr)
-
-
-#import pandas as pd
-#from mlxtend.frequent_patterns import apriori, association_rules
-#
-## Convertir las variables categóricas en variables binarias
-#df_association = df_ordered.copy()
-#
-## Convertir variables numéricas en categorías binarias (ejemplo: si Temperature > 24 se marca como 1)
-#df_association['High_Temperature'] = (df_association['Temperature'] > 24).astype(int)
-#df_association['High_Humidity'] = (df_association['Humidity'] > 50).astype(int)
-#df_association['High_Occupancy'] = (df_association['Occupancy'] > 5).astype(int)
-#
-## Eliminar columnas innecesarias
-#df_association.drop(columns=['EnergyConsumption', 'Temperature', 'Humidity', 'Occupancy'], inplace=True)
-#
-## Mostrar la estructura del nuevo dataframe binarizado
-#print(df_association.head())
-#
+    # Calcular y mostrar el coeficiente de Silhouette
+    sil_score = silhouette_score(X_pca, clusters)
+    print(f'Número de Componentes: {i} - Coeficiente de Silhouette: {sil_score:.2f}')
