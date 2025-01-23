@@ -1,0 +1,14 @@
+Notas:
+- Revisar comentarios de los bloques de código
+- Explicar el dataframe al principio del doc (decir que son consumos energeticos de casas etc etc)
+- Incluir índice al principio?
+- Utilizar get_dummies para variables categóricas sin orden aparente (holiday, HVACUsage, etc) y a
+mano si tienen un orden natural en los datos (dias de la semana, etc)
+- Incluir Feature engineering en doc -> 
+- Diría que no es necesario hacer balanceo del dataset no? O si?
+- Incluir optimización de parámetros
+- Incluir modelos XGBoost
+- Incluir ANOVA
+
+
+https://www.kaggle.com/datasets/ajinilpatel/energy-consumption-prediction
