@@ -1,12 +1,2 @@
 Notas:
-- Revisar comentarios de los bloques de código
-- Explicar el dataframe al principio del doc (decir que son consumos energeticos de casas etc etc)
-- Explicar columnas al principio del doc
-- Explicar apartados
-- Incluir Feature engineering en doc -> Poner en la parte de optimización
-- Incluir optimización de parámetros
-- Incluir modelos XGBoost
-- Incluir ANOVA
-
-
-https://www.kaggle.com/datasets/ajinilpatel/energy-consumption-prediction
+- https://www.kaggle.com/datasets/ajinilpatel/energy-consumption-prediction
